@@ -1,0 +1,128 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "url-shortener"
+version = "0.1.0"
+description = "URL shortener service with click analytics, built with FastAPI and SQLAlchemy 2.0"
+readme = "README.md"
+requires-python = ">=3.12"
+license = { text = "MIT" }
+dependencies = [
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.32",
+    "sqlalchemy[asyncio]>=2.0.36",
+    "asyncpg>=0.30",
+    "greenlet>=3.1",
+    "alembic>=1.14",
+    "pydantic>=2.10",
+    "pydantic-settings>=2.7",
+    "pyjwt>=2.10",
+    "passlib[bcrypt]>=1.7.4",
+    "bcrypt>=4.2",
+    "python-multipart>=0.0.20",
+    "email-validator>=2.2",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.3",
+    "pytest-asyncio>=0.25",
+    "pytest-cov>=6.0",
+    "httpx>=0.28",
+    "aiosqlite>=0.20",
+    "ruff>=0.9",
+    "mypy>=1.14",
+    "types-passlib>=1.7.7",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["app"]
+
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+extend-exclude = ["alembic/versions"]
+
+[tool.ruff.lint]
+select = [
+    "E", "W", "F", "I", "N", "UP", "B", "A", "C4", "DTZ", "T20", "EM", "ISC",
+    "ICN", "LOG", "G", "PIE", "TID", "Q", "RET", "SIM", "TCH", "ARG", "PTH",
+    "ERA", "PL", "RUF", "S", "ANN", "D", "TRY",
+]
+ignore = [
+    # Docstrings: required for public API only, enforced via per-file rules below.
+    "D100", "D101", "D102", "D103", "D104", "D105", "D106", "D107",
+    "D203", "D213", "D401",
+    # FastAPI depends on function signatures and Depends() defaults.
+    "B008",
+    # Magic value comparison is common in HTTP status handling.
+    "PLR2004",
+    # Annoying for tolerant parsers and config objects.
+    "TRY003", "EM101", "EM102",
+    # Scalar subscripts for SQLAlchemy column types are runtime-evaluated.
+    "TC001", "TC002", "TC003",
+    # Alembic/typing edge cases.
+    "ANN401",
+    # Boolean positional args in test helpers.
+    "FBT001", "FBT002",
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["S101", "ANN201", "ANN001", "PLR0913", "ARG001", "ARG002", "D103"]
+"alembic/env.py" = ["ANN201", "T201", "INP001"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["app"]
+
+[tool.ruff.lint.flake8-tidy-imports]
+ban-relative-imports = "parents"
+
+[tool.ruff.lint.pydocstyle]
+convention = "pep257"
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+warn_unreachable = true
+warn_no_return = true
+disallow_any_generics = true
+disallow_untyped_decorators = false
+show_error_codes = true
+pretty = true
+plugins = ["pydantic.mypy"]
+exclude = ["^alembic/versions/"]
+
+[[tool.mypy.overrides]]
+module = ["passlib.*"]
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+minversion = "8.0"
+testpaths = ["tests"]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "session"
+addopts = [
+    "--strict-markers",
+    "--strict-config",
+    "-ra",
+]
+markers = [
+    "postgres: tests that require a real PostgreSQL instance",
+]
+
+[tool.coverage.run]
+branch = true
+source = ["app"]
+omit = ["app/main.py"]
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = true
+exclude_lines = [
+    "pragma: no cover",
+    "if TYPE_CHECKING:",
+    "raise NotImplementedError",
+    "@overload",
+]
