@@ -70,7 +70,17 @@ ignore = [
 ]
 
 [tool.ruff.lint.per-file-ignores]
-"tests/**" = ["S101", "ANN201", "ANN001", "PLR0913", "ARG001", "ARG002", "D103"]
+"tests/**" = [
+    "S101",   # asserts are the point of a test
+    "S105",   # fake credentials in fixtures
+    "S106",
+    "ANN201",
+    "ANN001",
+    "PLR0913",
+    "ARG001",
+    "ARG002",
+    "D103",
+]
 "alembic/env.py" = ["ANN201", "T201", "INP001"]
 
 [tool.ruff.lint.isort]
