@@ -60,7 +60,7 @@ class AuthenticationError(AppError):
 class InvalidURLError(AppError):
     """The submitted URL is not a safe, resolvable target."""
 
-    status_code = status.HTTP_422_UNPROCESSABLE_ENTITY
+    status_code = status.HTTP_422_UNPROCESSABLE_CONTENT
     code = "invalid_url"
     message = "The provided URL cannot be shortened."
 
@@ -75,7 +75,11 @@ class GoneError(AppError):
 
 async def app_error_handler(_request: Request, exc: AppError) -> JSONResponse:
     """Render an :class:`AppError` as JSON."""
-    headers = {"WWW-Authenticate": "Bearer"} if isinstance(exc, AuthenticationError) else None
+    headers = (
+        {"WWW-Authenticate": "Bearer", "Cache-Control": "no-store", "Pragma": "no-cache"}
+        if isinstance(exc, AuthenticationError)
+        else None
+    )
     return JSONResponse(
         status_code=exc.status_code,
         content=exc.to_payload(),
@@ -87,14 +91,17 @@ async def validation_error_handler(
     _request: Request,
     exc: RequestValidationError,
 ) -> JSONResponse:
-    """Flatten FastAPI's validation errors into the API's error envelope."""
+    """Report validation locations without echoing credentials or exception objects."""
+    fields = [
+        {"type": error["type"], "loc": error["loc"], "msg": error["msg"]} for error in exc.errors()
+    ]
     return JSONResponse(
-        status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+        status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
         content={
             "error": {
                 "code": "validation_error",
                 "message": "Request payload is invalid.",
-                "details": {"fields": exc.errors()},
+                "details": {"fields": fields},
             }
         },
     )

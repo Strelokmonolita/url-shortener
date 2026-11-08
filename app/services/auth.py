@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+from asyncio import to_thread
+
 import jwt
+from sqlalchemy.exc import IntegrityError
 
 from app.core.config import settings
 from app.core.exceptions import AuthenticationError, ConflictError
@@ -44,36 +47,40 @@ class AuthService:
                 field="email",
             )
 
-        return await self._users.create(email=email, hashed_password=hash_password(password))
+        hashed_password = await to_thread(hash_password, password)
+        try:
+            return await self._users.create(email=email, hashed_password=hashed_password)
+        except IntegrityError as exc:
+            # create() has rolled back the failed transaction. Recheck the email
+            # instead of disguising every integrity failure as a duplicate.
+            if await self._users.email_exists(email):
+                raise ConflictError(
+                    "An account with this email already exists.",
+                    field="email",
+                ) from exc
+            raise
 
     async def authenticate(self, email: str, password: str) -> User:
         """Verify credentials and return the matching account.
 
         Raises:
             AuthenticationError: if the account is unknown, inactive, or the
-                password does not match. The same error is used for every case so
-                that the endpoint cannot be used to enumerate registered emails.
+                password does not match. Every case shares the same error, and
+                unknown emails still perform a dummy password verification.
         """
         user = await self._users.get_by_email(email)
-        invalid = AuthenticationError("Incorrect email or password.")
+        stored_hash = user.hashed_password if user is not None else _DUMMY_HASH
+        # bcrypt runs off the event loop, including the dummy verification used
+        # for unknown emails. All failed credential checks share one response.
+        password_valid = await to_thread(verify_password, password, stored_hash)
+        if user is None or not password_valid or not user.is_active:
+            raise AuthenticationError("Incorrect email or password.")
 
-        if user is None:
-            # Verify against a dummy hash so that an unknown email costs roughly
-            # the same time as a wrong password, which keeps the endpoint from
-            # leaking which addresses are registered.
-            verify_password(password, _DUMMY_HASH)
-            raise invalid
-
-        if not verify_password(password, user.hashed_password):
-            raise invalid
-
-        if not user.is_active:
-            raise AuthenticationError("This account is disabled.")
-
+        new_hash = None
         if password_needs_rehash(user.hashed_password):
-            await self._users.update_password(user, hash_password(password))
+            new_hash = await to_thread(hash_password, password)
 
-        await self._users.touch_last_login(user)
+        await self._users.touch_last_login(user, hashed_password=new_hash)
         return user
 
     def issue_tokens(self, user: User) -> TokenPair:

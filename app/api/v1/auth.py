@@ -4,8 +4,10 @@ from __future__ import annotations
 
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, status
+from fastapi import APIRouter, Depends, Response, status
+from fastapi.exceptions import RequestValidationError
 from fastapi.security import OAuth2PasswordRequestForm
+from pydantic import EmailStr, ValidationError
 
 from app.api.deps import AuthSvc, CurrentUser, UserRepo
 from app.schemas.auth import (
@@ -17,7 +19,34 @@ from app.schemas.auth import (
     UserRegister,
 )
 
-router = APIRouter(prefix="/auth", tags=["auth"])
+
+def _disable_caching(response: Response) -> None:
+    """Keep tokens and account information out of HTTP caches."""
+    response.headers["Cache-Control"] = "no-store"
+    response.headers["Pragma"] = "no-cache"
+
+
+def get_login_payload(
+    form: Annotated[OAuth2PasswordRequestForm, Depends()],
+) -> UserLogin:
+    """Apply JSON credential validation to the OAuth2 form, with form field locations."""
+    try:
+        return UserLogin(email=form.username, password=form.password)
+    except ValidationError as exc:
+        errors = exc.errors()
+        for error in errors:
+            error["loc"] = (
+                "body",
+                *("username" if part == "email" else part for part in error["loc"]),
+            )
+        raise RequestValidationError(errors) from exc
+
+
+router = APIRouter(
+    prefix="/auth",
+    tags=["auth"],
+    dependencies=[Depends(_disable_caching)],
+)
 
 
 @router.post(
@@ -40,7 +69,7 @@ async def register(payload: UserRegister, auth: AuthSvc) -> UserRead:
     responses={401: {"description": "Invalid credentials"}},
 )
 async def login(
-    form: Annotated[OAuth2PasswordRequestForm, Depends()],
+    payload: Annotated[UserLogin, Depends(get_login_payload)],
     auth: AuthSvc,
 ) -> TokenPair:
     """Authenticate with form-encoded credentials.
@@ -48,7 +77,7 @@ async def login(
     The ``username`` field carries the email address, which is what the OAuth2
     password flow expects and what the Swagger UI authorisation dialog sends.
     """
-    user = await auth.authenticate(email=form.username, password=form.password)
+    user = await auth.authenticate(email=payload.email, password=payload.password)
     return auth.issue_tokens(user)
 
 
@@ -80,14 +109,19 @@ async def refresh(payload: RefreshRequest, auth: AuthSvc) -> AccessToken:
     return AccessToken(access_token=access_token, expires_in=auth.access_token_lifetime)
 
 
-@router.get("/me", response_model=UserRead, summary="Current account")
+@router.get(
+    "/me",
+    response_model=UserRead,
+    summary="Current account",
+    responses={401: {"description": "Access token is invalid or expired"}},
+)
 async def read_current_user(user: CurrentUser) -> UserRead:
     """Return the authenticated account."""
     return UserRead.model_validate(user)
 
 
 @router.get("/exists", summary="Check whether an email is registered")
-async def email_registered(email: str, users: UserRepo) -> dict[str, bool]:
+async def email_registered(email: EmailStr, users: UserRepo) -> dict[str, bool]:
     """Report whether an email already has an account.
 
     Used by the registration form for early feedback.

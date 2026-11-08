@@ -48,8 +48,10 @@ class UserRepository:
         await self._session.refresh(user)
         return user
 
-    async def touch_last_login(self, user: User) -> None:
-        """Record the current moment as the account's last successful login."""
+    async def touch_last_login(self, user: User, *, hashed_password: str | None = None) -> None:
+        """Record a successful login and an optional rehash in one transaction."""
+        if hashed_password is not None:
+            user.hashed_password = hashed_password
         user.last_login_at = datetime.now(UTC)
         await self._session.commit()
 

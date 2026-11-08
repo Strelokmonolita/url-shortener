@@ -8,16 +8,46 @@ a real PostgreSQL instance and are skipped otherwise.
 
 from __future__ import annotations
 
+import hashlib
 import os
-from collections.abc import AsyncIterator, Iterator
+from collections.abc import AsyncIterator, Callable, Iterator
 
+import bcrypt
 import pytest
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
+import app.services.auth as auth_module
+from app.core import security
+from app.core.config import settings
 from app.db.session import create_engine
 from app.models import Base
 
 POSTGRES_TEST_URL = os.getenv("TEST_DATABASE_URL")
+
+
+@pytest.fixture(autouse=True)
+def jwt_secret(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Never sign test tokens with a secret from the developer's .env."""
+    monkeypatch.setattr(settings, "secret_key", "test-only-signing-secret-" * 3)
+
+
+@pytest.fixture
+def fast_password_hashing(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Exercise real bcrypt at a low test-only cost, including dummy verification."""
+    monkeypatch.setattr(security, "BCRYPT_ROUNDS", 4)
+    monkeypatch.setattr(auth_module, "_DUMMY_HASH", security.hash_password("dummy test password"))
+
+
+@pytest.fixture
+def legacy_password_hash(fast_password_hashing: None) -> Callable[[str], str]:
+    """Reproduce the original unprefixed, truncated-hex password format."""
+
+    def make_hash(password: str) -> str:
+        prepared = hashlib.sha256(password.encode("utf-8")).hexdigest().encode("ascii")[:44]
+        salt = bcrypt.gensalt(rounds=security.BCRYPT_ROUNDS)
+        return bcrypt.hashpw(prepared, salt).decode("ascii")
+
+    return make_hash
 
 
 @pytest.fixture(scope="session")
