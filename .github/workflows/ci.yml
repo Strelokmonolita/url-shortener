@@ -1,0 +1,48 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      ENVIRONMENT: test
+      DEBUG: "false"
+      SECRET_KEY: test-only-signing-secret-for-ci-not-for-deployment
+      TEST_DATABASE_URL: postgresql+asyncpg://shortener_test:shortener_test@127.0.0.1:5432/shortener_test
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: shortener_test
+          POSTGRES_PASSWORD: shortener_test
+          POSTGRES_DB: shortener_test
+        ports:
+          - "5432:5432"
+        options: >-
+          --health-cmd "pg_isready -U shortener_test -d shortener_test"
+          --health-interval 2s
+          --health-timeout 3s
+          --health-retries 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: "3.12"
+          enable-cache: true
+      - name: Install locked dependencies
+        run: uv sync --frozen --extra dev
+      - name: Lint and formatting
+        run: |
+          uv run --frozen --extra dev ruff check .
+          uv run --frozen --extra dev ruff format --check .
+      - name: Strict type checks
+        run: uv run --frozen --extra dev mypy app tests
+      - name: Unit and PostgreSQL integration tests
+        run: uv run --frozen --extra dev pytest --require-postgres

@@ -1,7 +1,8 @@
 """Alembic environment.
 
-The database URL comes from application settings so that a single ``.env`` file
-drives the API, the test suite and the migrations.
+CLI migrations default to the application settings. Programmatic callers can
+provide a URL or an existing synchronous connection, including connections to
+the isolated schemas used by PostgreSQL integration tests.
 """
 
 from __future__ import annotations
@@ -10,7 +11,7 @@ import asyncio
 from logging.config import fileConfig
 
 from sqlalchemy import Connection, pool
-from sqlalchemy.ext.asyncio import async_engine_from_config
+from sqlalchemy.ext.asyncio import create_async_engine
 
 from alembic import context
 from app.core.config import settings
@@ -20,10 +21,9 @@ from app.core.config import settings
 from app.models import Base
 
 config = context.config
-config.set_main_option("sqlalchemy.url", settings.database_url)
 
 if config.config_file_name is not None:
-    fileConfig(config.config_file_name)
+    fileConfig(config.config_file_name, disable_existing_loggers=False)
 
 target_metadata = Base.metadata
 
@@ -31,7 +31,7 @@ target_metadata = Base.metadata
 def run_migrations_offline() -> None:
     """Emit SQL to stdout without connecting to a database."""
     context.configure(
-        url=config.get_main_option("sqlalchemy.url"),
+        url=config.get_main_option("sqlalchemy.url") or settings.database_url,
         target_metadata=target_metadata,
         literal_binds=True,
         dialect_opts={"paramstyle": "named"},
@@ -55,21 +55,30 @@ def do_run_migrations(connection: Connection) -> None:
         context.run_migrations()
 
 
-async def run_migrations_online() -> None:
-    """Run migrations against the configured database."""
-    connectable = async_engine_from_config(
-        config.get_section(config.config_ini_section, {}),
-        prefix="sqlalchemy.",
+async def run_async_migrations() -> None:
+    """Run migrations with an owned async engine and always release it."""
+    connectable = create_async_engine(
+        config.get_main_option("sqlalchemy.url") or settings.database_url,
         poolclass=pool.NullPool,
     )
 
-    async with connectable.connect() as connection:
-        await connection.run_sync(do_run_migrations)
+    try:
+        async with connectable.connect() as connection:
+            await connection.run_sync(do_run_migrations)
+    finally:
+        await connectable.dispose()
 
-    await connectable.dispose()
+
+def run_migrations_online() -> None:
+    """Reuse an injected connection, or connect using the CLI configuration."""
+    connection = config.attributes.get("connection")
+    if connection is not None:
+        do_run_migrations(connection)
+        return
+    asyncio.run(run_async_migrations())
 
 
 if context.is_offline_mode():
     run_migrations_offline()
 else:
-    asyncio.run(run_migrations_online())
+    run_migrations_online()

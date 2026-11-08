@@ -3,8 +3,9 @@
 from functools import lru_cache
 from typing import Literal, Self
 
-from pydantic import Field, PostgresDsn, computed_field, model_validator
+from pydantic import Field, computed_field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+from sqlalchemy.engine import URL, make_url
 
 _DEFAULT_SECRET_KEY = "change-me-in-production"  # noqa: S105 - local development only
 _MIN_SIGNING_KEY_BYTES = {"HS256": 32, "HS384": 48, "HS512": 64}
@@ -76,22 +77,21 @@ class Settings(BaseSettings):
     @property
     def database_url(self) -> str:
         """Async SQLAlchemy connection URL (asyncpg driver)."""
-        return str(
-            PostgresDsn.build(
-                scheme="postgresql+asyncpg",
-                username=self.postgres_user,
-                password=self.postgres_password,
-                host=self.postgres_host,
-                port=self.postgres_port,
-                path=self.postgres_db,
-            )
-        )
+        return URL.create(
+            "postgresql+asyncpg",
+            username=self.postgres_user,
+            password=self.postgres_password,
+            host=self.postgres_host,
+            port=self.postgres_port,
+            database=self.postgres_db,
+        ).render_as_string(hide_password=False)
 
     @computed_field  # type: ignore[prop-decorator]
     @property
     def sync_database_url(self) -> str:
-        """Synchronous connection URL, used by Alembic's offline mode."""
-        return self.database_url.replace("+asyncpg", "+psycopg2")
+        """Equivalent synchronous SQLAlchemy URL (psycopg2 driver)."""
+        url = make_url(self.database_url).set(drivername="postgresql+psycopg2")
+        return url.render_as_string(hide_password=False)
 
     @computed_field  # type: ignore[prop-decorator]
     @property

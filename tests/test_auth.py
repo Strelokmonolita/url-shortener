@@ -1,4 +1,4 @@
-"""Authentication API contracts against an isolated SQLite database."""
+"""Authentication API contracts against isolated SQLite and PostgreSQL schemas."""
 
 import json
 import threading

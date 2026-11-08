@@ -1,0 +1,20 @@
+name: url-shortener-tests
+
+services:
+  db:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: shortener_test
+      POSTGRES_PASSWORD: shortener_test
+      POSTGRES_DB: shortener_test
+    ports:
+      - "127.0.0.1:5433:5432"
+    # Disposable test data, separate from the application's postgres_data volume.
+    tmpfs:
+      - /var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", 'pg_isready -U "$$POSTGRES_USER" -d "$$POSTGRES_DB"']
+      interval: 2s
+      timeout: 3s
+      retries: 15
+      start_period: 5s

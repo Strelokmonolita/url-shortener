@@ -1,4 +1,4 @@
-.PHONY: install run lint format typecheck test check up down logs migrate revision
+.PHONY: install run lint format typecheck test test-postgres check up down logs migrate revision
 
 install: ## Install the project with dev dependencies
 	uv sync --frozen --extra dev
@@ -17,10 +17,13 @@ format: ## Auto-fix lint issues and format code
 typecheck: ## Run mypy in strict mode
 	uv run --frozen --extra dev mypy app tests
 
-test: ## Run the test suite
-	uv run --frozen --extra dev pytest
+test: ## Run unit and SQLite tests without external services
+	uv run --frozen --extra dev pytest -m "not postgres"
 
-check: lint typecheck test ## Run every quality gate
+test-postgres: ## Run PostgreSQL integration tests (requires TEST_DATABASE_URL)
+	uv run --frozen --extra dev pytest -m postgres --require-postgres
+
+check: lint typecheck test ## Run local quality gates without external services
 
 up: ## Build and start the stack (does not apply migrations)
 	docker compose up --build -d

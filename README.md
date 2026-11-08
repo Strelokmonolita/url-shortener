@@ -5,11 +5,11 @@ SQLAlchemy 2.0 on top of PostgreSQL.
 
 ## Status
 
-Work in progress. Stages 1 and 2 provide the ASGI application, local startup,
-a Docker stack, API documentation, liveness and hardened Auth routes. Auth is
-tested against the ORM schema on SQLite; PostgreSQL schema alignment belongs to
-Stage 3. Link shortening and redirects are still unfinished. This is not
-production-ready.
+Work in progress. Stages 1–3 provide the ASGI application, local startup, a Docker
+stack, API documentation, liveness, hardened Auth routes and aligned PostgreSQL
+migrations. Database-backed contracts are tested on both SQLite and a real,
+Alembic-migrated PostgreSQL 17 instance. Link shortening and redirects are still
+unfinished. This is not production-ready.
 
 `GET /health` returns `200` with `{"status":"ok"}` without connecting to the
 database. It is **not** a database or migration readiness check. Application
@@ -104,19 +104,36 @@ reconfigure an already initialized PostgreSQL volume.
 
 ### Migrations
 
-The initial migration currently disagrees with the ORM's `last_login_at` type.
-Schema alignment and PostgreSQL integration tests belong to Stage 3. Starting
-this stack does **not** mean Auth is ready for use against its database.
+Apply migrations explicitly before using database-backed routes. Neither local
+startup nor Compose applies them automatically:
 
-When the migration work is ready, the explicit command is
-`docker compose exec api alembic upgrade head` (`make migrate`). It is never part
-of startup. Do not downgrade or reset an existing database to work around the
-unfinished schema.
+```powershell
+# For a locally running API, using its configured PostgreSQL connection:
+uv run --frozen alembic upgrade head
+uv run --frozen alembic check
+```
+
+For the full container stack, use `docker compose exec api alembic upgrade head`
+(`make migrate`) and `docker compose exec api alembic check` instead.
+
+The initial revision `dae2356cd32c` is unchanged. Stage 3 adds revision
+`6c3f9d7a2b10`, converting `users.last_login_at` from `VARCHAR(40)` to
+`TIMESTAMP WITH TIME ZONE` in place. Existing accounts, password hashes, links,
+clicks and null timestamps are retained. Legacy timestamps with offsets preserve
+their instants; timezone-naive values are interpreted as UTC independently of
+the database session's timezone. Invalid timestamp text aborts the transaction,
+leaving data and the migration revision unchanged; review and correct affected
+rows deliberately instead of clearing them automatically.
+
+The follow-up downgrade restores ISO-formatted UTC text, not necessarily the
+original timestamp spelling. Back up existing databases and schedule migrations:
+PostgreSQL locks the users table during the conversion. Do not reset a database
+or downgrade to `base` to fix an upgrade failure.
 
 ## Authentication (Stage 2)
 
 All paths below have the `/api/v1/auth` prefix and require a database with the
-correct schema. The migration warning above still applies to PostgreSQL.
+correct schema. Apply the migrations above before using Auth on PostgreSQL.
 
 | Method and path | Contract |
 | --- | --- |
@@ -150,24 +167,67 @@ and authentication errors disable HTTP caching.
 - `/exists` and registration conflicts intentionally reveal account availability.
   Uniform login errors are not a guarantee against account enumeration.
 - Rate limiting, logout/revocation and password recovery are not implemented.
-  Real deployments also require HTTPS and the pending PostgreSQL schema work.
+  Real deployments also require HTTPS and these missing protections.
 
 ## Quality checks
 
 Development tools use the `dev` extra, not a separate dependency group. The tests
-use in-memory SQLite and do not require Docker or PostgreSQL. Auth tests use
-real bcrypt at cost 4 for speed and a test-only JWT secret, never the secret
+below use in-memory SQLite and do not require Docker or PostgreSQL. Auth tests
+use real bcrypt at cost 4 for speed and a test-only JWT secret, never the secret
 from the developer's `.env`; runtime bcrypt cost remains 12.
 
 ```powershell
 uv run --frozen --extra dev ruff check .
 uv run --frozen --extra dev ruff format --check .
 uv run --frozen --extra dev mypy app tests
-uv run --frozen --extra dev pytest
+uv run --frozen --extra dev pytest -m "not postgres"
 ```
 
 To include coverage, run
-`uv run --frozen --extra dev pytest --cov=app --cov-report=term-missing`.
+`uv run --frozen --extra dev pytest -m "not postgres" --cov=app --cov-report=term-missing`.
+
+### PostgreSQL integration tests (Stage 3)
+
+The PostgreSQL suite repeats the Auth API, repository and model contracts against
+the actual Alembic schema, not `metadata.create_all()`. It also checks fresh
+upgrades, schema drift (types/defaults/keys/indexes), legacy timestamp conversion,
+downgrade/re-upgrade, transaction rollback on invalid legacy values, server
+defaults, 64-bit identifiers, foreign-key cascades and concurrent registration.
+
+Use the separate disposable test stack; it does not share the application's
+`postgres_data` volume or credentials:
+
+```powershell
+docker compose -f compose.test.yaml up -d --wait
+$env:TEST_DATABASE_URL = "postgresql+asyncpg://shortener_test:shortener_test@127.0.0.1:5433/shortener_test"
+uv run --frozen --extra dev pytest -m postgres --require-postgres
+docker compose -f compose.test.yaml down
+Remove-Item Env:TEST_DATABASE_URL
+```
+
+On Linux/macOS, set the URL with:
+
+```sh
+export TEST_DATABASE_URL='postgresql+asyncpg://shortener_test:shortener_test@127.0.0.1:5433/shortener_test'
+```
+
+Use `unset TEST_DATABASE_URL` after stopping the test stack.
+The test stack uses port `5433` and keeps PostgreSQL data in temporary memory;
+stopping it discards only test data.
+
+Alternatively, point `TEST_DATABASE_URL` at a dedicated PostgreSQL test database
+using the `postgresql+asyncpg` driver. Its role must be allowed to create schemas.
+Every test creates a randomly named schema with no `public` search-path fallback
+and removes only that schema, including after failures. Tests never fall back to
+the application connection from `.env` and never drop the configured database or
+existing public tables. An invalid URL or an unavailable configured database
+fails the tests.
+
+A plain `pytest` runs both backends when the URL is set; otherwise PostgreSQL
+cases are skipped. `--require-postgres` makes a missing URL an error, preventing
+an integration check from silently passing without PostgreSQL. GitHub Actions
+runs lint, formatting, strict typing and the entire suite with PostgreSQL 17 and
+this flag enabled.
 
 ### Make shortcuts
 
@@ -178,10 +238,11 @@ To include coverage, run
 | `make lint` | Check Ruff lint and formatting |
 | `make format` | Apply Ruff fixes and formatting |
 | `make typecheck` | Run strict Mypy |
-| `make test` | Run the test suite |
-| `make check` | Run lint, typing and tests |
+| `make test` | Run unit and SQLite tests without external services |
+| `make test-postgres` | Run integration tests with an explicit `TEST_DATABASE_URL` |
+| `make check` | Run local lint, typing, unit and SQLite tests |
 | `make up` | Build and start Docker services without migrations |
 | `make down` | Stop Docker services without removing database data |
 | `make logs` | Follow API container logs |
-| `make migrate` | Explicitly apply migrations; deferred until Stage 3 |
+| `make migrate` | Explicitly apply migrations inside the API container |
 | `make revision m="message"` | Generate a migration against the configured DB |

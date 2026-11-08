@@ -4,6 +4,7 @@ from typing import Literal
 
 import pytest
 from pydantic import ValidationError
+from sqlalchemy.engine import make_url
 
 from app.core.config import Settings
 
@@ -85,3 +86,42 @@ def test_token_lifetimes_must_be_positive(lifetime: int) -> None:
             secret_key="test-secret",
             refresh_token_expire_days=lifetime,
         )
+
+
+@pytest.mark.parametrize(
+    ("username", "password", "database", "host"),
+    [
+        ("shortener", "shortener", "shortener", "localhost"),
+        ("test@user", "test%password/@:# ?", "test database", "localhost"),
+        ("test+asyncpg", "literal+asyncpg-password", "db+asyncpg", "localhost"),
+        ("пользователь", "пароль🔐", "тест", "localhost"),
+        ("shortener", "test-password", "shortener_test", "::1"),
+    ],
+)
+def test_database_urls_preserve_credentials_and_connection_fields(
+    username: str,
+    password: str,
+    database: str,
+    host: str,
+) -> None:
+    configured = Settings(
+        _env_file=None,
+        environment="test",
+        postgres_user=username,
+        postgres_password=password,
+        postgres_db=database,
+        postgres_host=host,
+        postgres_port=55432,
+    )
+
+    for value, driver in [
+        (configured.database_url, "postgresql+asyncpg"),
+        (configured.sync_database_url, "postgresql+psycopg2"),
+    ]:
+        parsed = make_url(value)
+        assert parsed.drivername == driver
+        assert parsed.username == username
+        assert parsed.password == password
+        assert parsed.database == database
+        assert parsed.host == host
+        assert parsed.port == configured.postgres_port
