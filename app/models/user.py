@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+from datetime import datetime
 from typing import TYPE_CHECKING
 
-from sqlalchemy import Boolean, String, func
+from sqlalchemy import Boolean, DateTime, String, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base, TimestampMixin
@@ -32,7 +33,10 @@ class User(Base, TimestampMixin):
         server_default="true",
         nullable=False,
     )
-    last_login_at: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    last_login_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+    )
 
     links: Mapped[list[Link]] = relationship(
         back_populates="owner",

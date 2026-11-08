@@ -19,7 +19,6 @@ dependencies = [
     "pydantic>=2.10",
     "pydantic-settings>=2.7",
     "pyjwt>=2.10",
-    "passlib[bcrypt]>=1.7.4",
     "bcrypt>=4.2",
     "python-multipart>=0.0.20",
     "email-validator>=2.2",
@@ -136,3 +135,6 @@ exclude_lines = [
     "raise NotImplementedError",
     "@overload",
 ]
+
+[dependency-groups]
+dev = []
