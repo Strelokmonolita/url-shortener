@@ -20,6 +20,7 @@ def main() -> None:
         port=settings.port,
         reload=settings.debug,
         log_level="debug" if settings.debug else "info",
+        access_log=False,
     )
 
 

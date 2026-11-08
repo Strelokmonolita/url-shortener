@@ -18,8 +18,9 @@ class Click(Base):
     """A single redirect served for a link.
 
     Events are append-only and carry no foreign key to the visitor: the raw IP is
-    deliberately not stored, only a salted hash, which is enough to count unique
-    visitors without keeping personal data.
+    deliberately not stored, only a keyed hash, which is enough to estimate
+    unique visitors without retaining the original address. This is pseudonymous
+    data, not a guarantee of anonymity or a count of distinct people.
     """
 
     __tablename__ = "clicks"
@@ -41,7 +42,7 @@ class Click(Base):
     )
     user_agent: Mapped[str | None] = mapped_column(String(512), nullable=True)
     referer: Mapped[str | None] = mapped_column(Text, nullable=True)
-    # SHA-256 of ``<ip>:<secret>``; truncated to 64 hex characters.
+    # Domain-separated HMAC-SHA256 of a canonical IP; 64 hex characters.
     visitor_hash: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
 
     link: Mapped[Link] = relationship(back_populates="clicks", lazy="raise")

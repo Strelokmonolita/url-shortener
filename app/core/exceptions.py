@@ -73,13 +73,23 @@ class GoneError(AppError):
     message = "This link is no longer available."
 
 
+class CodeGenerationError(AppError):
+    """A bounded allocation attempt exhausted its generated-code candidates."""
+
+    status_code = status.HTTP_503_SERVICE_UNAVAILABLE
+    code = "code_generation_failed"
+    message = "Could not allocate a unique short code. Please try again."
+
+
 async def app_error_handler(_request: Request, exc: AppError) -> JSONResponse:
     """Render an :class:`AppError` as JSON."""
-    headers = (
-        {"WWW-Authenticate": "Bearer", "Cache-Control": "no-store", "Pragma": "no-cache"}
-        if isinstance(exc, AuthenticationError)
-        else None
-    )
+    # Missing codes can be created later; gone links may be re-enabled. Do not
+    # let caches retain errors beyond the current request's database state.
+    headers = {"Cache-Control": "no-store"}
+    if isinstance(exc, AuthenticationError):
+        headers.update({"WWW-Authenticate": "Bearer", "Pragma": "no-cache"})
+    if isinstance(exc, CodeGenerationError):
+        headers["Retry-After"] = "1"
     return JSONResponse(
         status_code=exc.status_code,
         content=exc.to_payload(),

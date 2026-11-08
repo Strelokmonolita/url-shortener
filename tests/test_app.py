@@ -88,6 +88,8 @@ async def test_openapi_includes_the_existing_auth_router(client: AsyncClient) ->
         "/api/v1/auth/refresh",
         "/api/v1/auth/me",
         "/api/v1/auth/exists",
+        "/api/v1/links",
+        "/{code}",
     } <= paths.keys()
 
 
@@ -100,11 +102,12 @@ async def test_domain_exception_handler_is_used_for_requests(
     application: FastAPI,
     client: AsyncClient,
 ) -> None:
-    @application.get("/test-conflict")
+    # A single-component route registered after /{code} would be shadowed.
+    @application.get("/_tests/conflict")
     async def conflict() -> None:
         raise ConflictError("Test conflict.", field="test")
 
-    response = await client.get("/test-conflict")
+    response = await client.get("/_tests/conflict")
 
     assert response.status_code == 409
     assert response.json() == {
@@ -159,4 +162,5 @@ def test_local_entry_point_uses_settings(monkeypatch: pytest.MonkeyPatch, debug:
         port=8123,
         reload=debug,
         log_level="debug" if debug else "info",
+        access_log=False,
     )

@@ -15,15 +15,20 @@ from collections.abc import AsyncIterator, Callable
 
 import bcrypt
 import pytest
+from fastapi import FastAPI
+from httpx import ASGITransport, AsyncClient
 from sqlalchemy.engine import URL
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
 import app.services.auth as auth_module
 from alembic import command
+from app.api.deps import get_session_factory
 from app.core import security
 from app.core.config import settings
 from app.db.session import create_engine
-from app.models import Base
+from app.main import create_app
+from app.models import Base, User
+from app.repositories.user import UserRepository
 from tests.database import isolated_postgres_engine, parse_postgres_test_url, run_alembic
 
 
@@ -119,6 +124,39 @@ async def session(session_factory: async_sessionmaker[AsyncSession]) -> AsyncIte
     async with session_factory() as db_session:
         yield db_session
         await db_session.rollback()
+
+
+@pytest.fixture
+def api_application(session_factory: async_sessionmaker[AsyncSession]) -> FastAPI:
+    """Bind both request and background sessions to the same isolated database."""
+    application = create_app()
+    application.dependency_overrides[get_session_factory] = lambda: session_factory
+    return application
+
+
+@pytest.fixture
+async def api_client(api_application: FastAPI) -> AsyncIterator[AsyncClient]:
+    """Exercise the assembled API with a known visitor address and real lifespan."""
+    async with (
+        api_application.router.lifespan_context(api_application),
+        AsyncClient(
+            transport=ASGITransport(app=api_application, client=("203.0.113.7", 5000)),
+            base_url="http://testserver",
+        ) as client,
+    ):
+        yield client
+
+
+@pytest.fixture
+async def link_owner(session: AsyncSession) -> User:
+    """Create an account for token-authenticated link tests without bcrypt work."""
+    return await UserRepository(session).create("link-owner@example.com", "unused-test-hash")
+
+
+@pytest.fixture
+def link_headers(link_owner: User) -> dict[str, str]:
+    """Mint an access token with the test-only signing secret."""
+    return {"Authorization": f"Bearer {security.create_access_token(link_owner.id)}"}
 
 
 @pytest.fixture(scope="session")

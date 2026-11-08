@@ -6,6 +6,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 
 from app import __version__
+from app.api.redirect import router as redirect_router
 from app.api.v1.router import router as api_router
 from app.core.config import settings
 from app.core.exceptions import register_exception_handlers
@@ -36,6 +37,9 @@ def create_app() -> FastAPI:
     async def health() -> dict[str, str]:
         """Report application liveness, not database or migration readiness."""
         return {"status": "ok"}
+
+    # Keep the single-component catch-all behind docs, liveness and API routes.
+    application.include_router(redirect_router)
 
     return application
 

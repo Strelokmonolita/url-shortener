@@ -5,11 +5,12 @@ SQLAlchemy 2.0 on top of PostgreSQL.
 
 ## Status
 
-Work in progress. Stages 1–3 provide the ASGI application, local startup, a Docker
-stack, API documentation, liveness, hardened Auth routes and aligned PostgreSQL
-migrations. Database-backed contracts are tested on both SQLite and a real,
-Alembic-migrated PostgreSQL 17 instance. Link shortening and redirects are still
-unfinished. This is not production-ready.
+Stages 1–4 implement the working core: the ASGI application, Docker stack,
+authentication, owner-scoped link creation/listing, collision-safe short codes,
+public redirects and background click recording. Database-backed contracts are
+tested on both SQLite and a real, Alembic-migrated PostgreSQL 17 instance.
+Review the Auth and analytics limitations below before deployment; this is not
+a fully hardened production deployment.
 
 `GET /health` returns `200` with `{"status":"ok"}` without connecting to the
 database. It is **not** a database or migration readiness check. Application
@@ -169,6 +170,113 @@ and authentication errors disable HTTP caching.
 - Rate limiting, logout/revocation and password recovery are not implemented.
   Real deployments also require HTTPS and these missing protections.
 
+## Links and redirects (Stage 4)
+
+Use an **access** token in `Authorization: Bearer <access_token>` for link
+management. Refresh tokens cannot be used here.
+
+| Method and path | Contract |
+| --- | --- |
+| `POST /api/v1/links` | JSON `original_url`, optional `custom_alias` and `expires_at`; link representation, `201` |
+| `GET /api/v1/links?limit=20&offset=0` | Only the current user's links; `{items, total, limit, offset}`, `200` |
+| `GET /{code}` | Public `302` with `Location`; unknown code, `404`; disabled or expired link, `410` |
+
+Link representations include `id`, `user_id`, `code`, `original_url`,
+`short_url`, `is_custom_alias`, `is_active`, `expires_at`, `created_at` and
+`updated_at`. `short_url` uses the configured `BASE_URL`, never the request's
+Host header. If the public URL includes a path prefix, configure the reverse
+proxy to remove that prefix before forwarding requests to the API.
+
+Targets must be absolute HTTP(S) URLs with a host, without embedded credentials,
+control characters or backslashes. URLs are normalized (including IDNA hosts
+and percent-encoded paths) and limited to 2048 characters after normalization.
+Validation checks syntax only: the server does not fetch targets or resolve
+their DNS, and local/private HTTP(S) destinations are allowed.
+
+Aliases are case-sensitive and contain only ASCII letters, digits, `-` and `_`.
+They must contain 1–`MAX_CUSTOM_ALIAS_LENGTH` characters (32 by default, at most
+64). System paths such as `api`, `docs`, `redoc`, `health`, `openapi`, `static`,
+`admin` and `metrics` are reserved **case-insensitively**. Codes are globally
+unique across owners; disabled or expired links do not release their codes.
+A duplicate alias returns `409` and is never replaced silently.
+
+Generated codes use secure random base62 characters, with length selected by
+`SHORT_CODE_LENGTH` (7 by default). Allocation checks the database unique index
+and retries collisions, including concurrent insert races, up to 10 times.
+Exhaustion returns `503` with `Retry-After: 1` rather than looping indefinitely.
+
+`expires_at` must be a future ISO timestamp **with a timezone**; it is normalized
+to UTC. At the exact expiry instant, redirects return `410`. Omitting it creates
+a non-expiring link. Lists include unavailable links, ordered newest first with
+an ID tie-breaker. `limit` must be 1–100 and `offset` non-negative. Link management,
+redirects and domain errors use `Cache-Control: no-store` so cached responses do
+not bypass expiry or retain stale link availability. No additional Stage 4
+migration is needed; the existing schema already contains links and clicks.
+
+### Create and follow the first link (PowerShell)
+
+Start the API and apply migrations using the startup instructions above. Choose
+an unused email and alias for this example; registration is needed only once.
+Piping JSON through stdin avoids native argument-quoting differences between
+Windows PowerShell and PowerShell 7.
+
+```powershell
+$api = "http://localhost:8000"
+$credentials = '{"email":"first@example.com","password":"local-example-password"}'
+$credentials | curl.exe -sS --fail-with-body "$api/api/v1/auth/register" `
+  -H "Content-Type: application/json" --data-binary "@-"
+
+$tokens = $credentials | curl.exe -sS --fail-with-body "$api/api/v1/auth/login/json" `
+  -H "Content-Type: application/json" --data-binary "@-" | ConvertFrom-Json
+
+$link = '{"original_url":"https://example.com","custom_alias":"first-link"}' |
+  curl.exe -sS --fail-with-body "$api/api/v1/links" `
+    -H "Authorization: Bearer $($tokens.access_token)" `
+    -H "Content-Type: application/json" --data-binary "@-" | ConvertFrom-Json
+$link | ConvertTo-Json
+
+# Inspect the actual GET response: 302 and Location: https://example.com/
+curl.exe -i $link.short_url
+
+# Follow the redirect with GET, print response headers, discard the target body.
+curl.exe -sS -L -D - -o NUL $link.short_url
+```
+
+Use `curl` instead of `curl.exe` and `/dev/null` instead of `NUL` on Linux/macOS.
+Do not use `curl -I` for this check: the public endpoint implements `GET`, not
+`HEAD`. Each of the two redirect checks above records its own click.
+
+### Click analytics and limitations
+
+Successful redirects enqueue an asynchronous `BackgroundTasks` operation **after
+the 302 response is sent**. It opens a separate session from the same database
+factory; function-scoped request sessions close before response delivery so
+background writes do not wait on a connection held by their own request. It
+records a click with a database-generated timestamp, link ID,
+visitor hash, User-Agent (up to 512 characters) and Referer (up to 2048). Control
+characters are removed from headers. Missing visitor information remains null.
+Requests returning `404` or `410` do not record clicks.
+
+Visitor addresses are canonicalized (including IPv4-mapped IPv6) and hashed with
+domain-separated HMAC-SHA256 using `SECRET_KEY`; raw IP addresses are never
+passed to the background task or stored in the click table. The application uses
+the ASGI client address rather than trusting arbitrary `X-Forwarded-For` or
+`X-Real-IP` headers. Behind a proxy, configure Uvicorn's trusted proxy allowlist
+explicitly; do not trust every forwarding source. The `python -m app` entry point
+disables Uvicorn access logs to avoid logging raw visitor addresses. When running
+Uvicorn directly, add `--no-access-log`, and review reverse-proxy logging too.
+
+- Background recording is **best-effort, not a durable queue**. Process termination
+  or a database failure can lose events; a failed insert never changes the already
+  sent redirect. Failures log only the link ID, not SQL parameters or metadata.
+- Hashes are pseudonymous, not anonymous. Shared addresses can represent many
+  people; changing `SECRET_KEY` changes visitor hashes and breaks continuity.
+  User-Agent and Referer can also contain sensitive information; set an explicit
+  retention policy before deployment.
+- This stage records events but does not expose an aggregation/reporting API or
+  link update/delete endpoints. Rate limiting and abuse prevention remain required
+  for public production use, alongside the Auth protections listed above.
+
 ## Quality checks
 
 Development tools use the `dev` extra, not a separate dependency group. The tests
@@ -188,11 +296,13 @@ To include coverage, run
 
 ### PostgreSQL integration tests (Stage 3)
 
-The PostgreSQL suite repeats the Auth API, repository and model contracts against
-the actual Alembic schema, not `metadata.create_all()`. It also checks fresh
-upgrades, schema drift (types/defaults/keys/indexes), legacy timestamp conversion,
-downgrade/re-upgrade, transaction rollback on invalid legacy values, server
-defaults, 64-bit identifiers, foreign-key cascades and concurrent registration.
+The PostgreSQL suite repeats the Auth, links and redirects API, repository and
+model contracts against the actual Alembic schema, not `metadata.create_all()`.
+It also checks fresh upgrades, schema drift (types/defaults/keys/indexes), legacy
+timestamp conversion, downgrade/re-upgrade, transaction rollback on invalid legacy values, server
+defaults, 64-bit identifiers, foreign-key cascades, concurrent registration and
+short-code allocation races. Click tests check separate background sessions,
+visitor pseudonymization, metadata bounds and analytics failure isolation.
 
 Use the separate disposable test stack; it does not share the application's
 `postgres_data` volume or credentials:
