@@ -356,3 +356,9 @@ this flag enabled.
 | `make logs` | Follow API container logs |
 | `make migrate` | Explicitly apply migrations inside the API container |
 | `make revision m="message"` | Generate a migration against the configured DB |
+
+## License
+
+This project is licensed under the [MIT License](LICENSE).
+
+Copyright (c) 2026 Strelokmonolita.
