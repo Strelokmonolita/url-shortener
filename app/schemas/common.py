@@ -2,11 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Generic, TypeVar
-
 from pydantic import BaseModel, Field
-
-T = TypeVar("T")
 
 
 class ErrorDetail(BaseModel):
@@ -23,7 +19,7 @@ class ErrorResponse(BaseModel):
     error: ErrorDetail = Field(..., description="What went wrong and why.")
 
 
-class Page(BaseModel, Generic[T]):
+class Page[T](BaseModel):
     """A slice of a larger collection."""
 
     items: list[T]

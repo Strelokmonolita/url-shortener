@@ -1,8 +1,10 @@
 """Local development entry point.
 
-Run the API with live reload::
+Run the API using settings from the environment::
 
-    python -m app.main
+    python -m app
+
+Set ``DEBUG=true`` to enable live reload.
 """
 
 import uvicorn
